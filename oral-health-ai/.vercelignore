@@ -1,0 +1,3 @@
+# Exclude the Python backend entirely from Vercel
+# The backend is deployed separately on Render
+backend/
