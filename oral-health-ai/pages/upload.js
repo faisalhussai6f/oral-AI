@@ -260,6 +260,16 @@ function pageUpload() {
               </svg>
               Stop Camera
             </button>
+
+            <!-- Torch / Flashlight toggle (shown while streaming, hidden on desktop) -->
+            <button id="inl-torch-btn"
+              onclick="inlToggleTorch()"
+              class="text-sm px-3 py-2 rounded-lg border border-gray-700 text-gray-400
+                     hover:border-yellow-600 hover:text-yellow-400 transition-colors hidden
+                     flex items-center gap-2"
+              title="Toggle flashlight (Android/mobile only)">
+              🔦 Torch
+            </button>
           </div>
 
           <!-- Quality bar (shown while camera is active or after capture) -->
@@ -421,6 +431,8 @@ let _uploadTab = 'file';
 let _inlStream       = null;   // MediaStream when camera is live
 let _inlQualityTimer = null;   // setInterval id for live quality polling
 let _inlCaptured     = false;  // true once a photo has been taken this session
+let _torchOn         = false;  // current torch/flashlight state
+let _torchSupported  = false;  // set true when torch capability is confirmed
 
 // ───────────────────────────────────────────────────────────────────────────
 //  TAB SWITCHER
@@ -496,6 +508,15 @@ async function inlOpenCamera() {
   vid.srcObject = _inlStream;
   await vid.play().catch(() => {});   // some browsers need an explicit play()
 
+  // Check torch capability and show button if supported
+  const track = _inlStream.getVideoTracks()[0];
+  if (track) {
+    const caps = track.getCapabilities ? track.getCapabilities() : {};
+    _torchSupported = !!caps.torch;
+    const torchBtn = document.getElementById('inl-torch-btn');
+    if (torchBtn) torchBtn.classList.toggle('hidden', !_torchSupported);
+  }
+
   // Show streaming UI
   _inlSetStreamingUI(true);
 
@@ -520,8 +541,8 @@ function inlCapturePhoto() {
 
   const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
 
-  // Run quality check
-  const qual = _inlAssessQuality(dataUrl);
+  // Run quality check on the video element (better accuracy than re-decoding JPEG)
+  const qual = _inlAssessQuality(vid);
   _inlUpdateQualityUI(qual);
 
   if (qual.score < 40) {
@@ -588,9 +609,19 @@ function inlRetakePhoto() {
 function inlStopCamera(keepUI = false) {
   // Stop all tracks
   if (_inlStream) {
+    // Turn off torch before stopping (prevents it staying on)
+    if (_torchOn) {
+      const track = _inlStream.getVideoTracks()[0];
+      if (track && track.getCapabilities?.()?.torch) {
+        track.applyConstraints({ advanced: [{ torch: false }] }).catch(() => {});
+      }
+    }
     _inlStream.getTracks().forEach(t => t.stop());
     _inlStream = null;
   }
+  _torchOn        = false;
+  _torchSupported = false;
+  _darkTickCount  = 0;
   // Kill quality loop
   if (_inlQualityTimer) {
     clearInterval(_inlQualityTimer);
@@ -624,6 +655,66 @@ function inlStopCamera(keepUI = false) {
 }
 
 // ───────────────────────────────────────────────────────────────────────────
+//  TORCH / FLASHLIGHT
+//  Uses the MediaStreamTrack ImageCapture API — works on Android Chrome/Edge.
+//  iOS Safari does not support torch via getUserMedia (use the native camera).
+// ───────────────────────────────────────────────────────────────────────────
+
+let _darkTickCount = 0;   // consecutive dark ticks before auto-torch fires
+
+async function _inlSetTorch(on) {
+  if (!_inlStream) return;
+  const track = _inlStream.getVideoTracks()[0];
+  if (!track) return;
+
+  // Check capability
+  const caps = track.getCapabilities ? track.getCapabilities() : {};
+  if (!caps.torch) {
+    _torchSupported = false;
+    return;
+  }
+  _torchSupported = true;
+
+  try {
+    await track.applyConstraints({ advanced: [{ torch: on }] });
+    _torchOn = on;
+    _inlUpdateTorchBtn(on);
+    if (on) showToast('💡 Flashlight on — image is dark', 'info');
+  } catch (e) {
+    console.warn('[OralAI torch]', e);
+  }
+}
+
+function _inlAutoTorch(q) {
+  // Only attempt on mobile rear camera where torch is relevant
+  if (!_inlStream) return;
+  if (q.checks.lighting === 'dark') {
+    _darkTickCount++;
+    // Fire after 2 consecutive dark readings (~3 s)
+    if (_darkTickCount >= 2 && !_torchOn) {
+      _inlSetTorch(true);
+    }
+  } else {
+    _darkTickCount = 0;
+    // Turn off torch when lighting is good again
+    if (_torchOn) _inlSetTorch(false);
+  }
+}
+
+function _inlUpdateTorchBtn(on) {
+  const btn = document.getElementById('inl-torch-btn');
+  if (!btn) return;
+  btn.textContent   = on ? '🔦 Torch On' : '🔦 Torch';
+  btn.style.background = on ? 'rgba(251,191,36,0.2)' : '';
+  btn.style.borderColor= on ? 'rgba(251,191,36,0.5)' : '';
+  btn.style.color      = on ? '#fbbf24' : '';
+}
+
+function inlToggleTorch() {
+  _inlSetTorch(!_torchOn);
+}
+
+// ───────────────────────────────────────────────────────────────────────────
 //  HELPERS — UI state
 // ───────────────────────────────────────────────────────────────────────────
 
@@ -639,6 +730,8 @@ function _inlSetStreamingUI(isStreaming) {
   document.getElementById('inl-cam-stop-btn')?.classList.toggle('hidden',    !isStreaming);
   document.getElementById('inl-cam-retake-btn')?.classList.add('hidden');
   document.getElementById('inl-cam-confirm-row')?.classList.add('hidden');
+  // Torch button: only show while streaming AND torch is supported
+  if (!isStreaming) document.getElementById('inl-torch-btn')?.classList.add('hidden');
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -736,41 +829,81 @@ function _inlHandleCameraError(err) {
 //  HELPERS — quality assessment (canvas pixel analysis)
 // ───────────────────────────────────────────────────────────────────────────
 
-function _inlAssessQuality(dataUrl) {
+function _inlAssessQuality(source) {
+  // source is either a dataUrl string OR a live HTMLVideoElement
+  // For live video we draw at full resolution to get accurate sharpness
   const canvas = document.createElement('canvas');
-  canvas.width = 160; canvas.height = 120;
-  const ctx = canvas.getContext('2d');
-  const img = new Image();
-  img.src = dataUrl;
+  const ctx    = canvas.getContext('2d');
 
-  let brightness = 128, sharpness = 60;
+  let brightness = 128, sharpness = 60, drawOk = false;
+
   try {
-    ctx.drawImage(img, 0, 0, 160, 120);
-    const px  = ctx.getImageData(0, 0, 160, 120).data;
-    let   sum = 0;
-    for (let i = 0; i < px.length; i += 4)
-      sum += (px[i] + px[i+1] + px[i+2]) / 3;
-    brightness = Math.round(sum / (px.length / 4));
-    let vsum = 0;
-    for (let i = 0; i < px.length; i += 4)
-      vsum += Math.pow((px[i]+px[i+1]+px[i+2])/3 - brightness, 2);
-    sharpness = Math.min(100, Math.round(Math.sqrt(vsum / (px.length / 4))));
-  } catch (_) { /* non-critical */ }
+    if (source instanceof HTMLVideoElement) {
+      // Use native video resolution for accuracy — cap at 320×240 for perf
+      const W = Math.min(source.videoWidth  || 320, 320);
+      const H = Math.min(source.videoHeight || 240, 240);
+      canvas.width  = W;
+      canvas.height = H;
+      ctx.drawImage(source, 0, 0, W, H);
+      drawOk = true;
+    } else {
+      // dataUrl path — draw at 320×240 (much better than 160×120)
+      canvas.width = 320; canvas.height = 240;
+      const img = new Image();
+      img.src = source;
+      ctx.drawImage(img, 0, 0, 320, 240);
+      drawOk = true;
+    }
 
-  const brightOk = brightness > 55 && brightness < 215;
-  const sharpOk  = sharpness  > 18;
-  const score    = Math.round(
-    (brightOk ? 40 : brightness > 25 ? 20 : 0) +
-    (sharpOk  ? 40 : sharpness  > 10 ? 20 : 0) +
-    20   // baseline for having an image at all
-  );
+    if (drawOk) {
+      const px  = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+      const len = px.length / 4;
+
+      // ── Brightness: mean luminance ────────────────────────────
+      let sum = 0;
+      for (let i = 0; i < px.length; i += 4)
+        sum += 0.299 * px[i] + 0.587 * px[i+1] + 0.114 * px[i+2]; // luma
+      brightness = Math.round(sum / len);
+
+      // ── Sharpness: Laplacian variance approximation ───────────
+      // Sample every 2nd pixel row/col for speed; use 3-tap Laplacian
+      const W = canvas.width, H = canvas.height;
+      let lap = 0, lapCount = 0;
+      for (let y = 1; y < H - 1; y += 2) {
+        for (let x = 1; x < W - 1; x += 2) {
+          const idx  = (y * W + x) * 4;
+          const up   = ((y-1)*W + x) * 4;
+          const dn   = ((y+1)*W + x) * 4;
+          const lt   = (y*W + (x-1)) * 4;
+          const rt   = (y*W + (x+1)) * 4;
+          const luma = (i) => 0.299*px[i] + 0.587*px[i+1] + 0.114*px[i+2];
+          const l = luma(idx);
+          const d = Math.abs(4*l - luma(up) - luma(dn) - luma(lt) - luma(rt));
+          lap += d; lapCount++;
+        }
+      }
+      // Normalise: typical sharp image → 8–20, blurry → 0–4
+      sharpness = lapCount > 0 ? Math.min(100, Math.round((lap / lapCount) * 5)) : 0;
+    }
+  } catch (_) { /* non-critical — fall through to defaults */ }
+
+  // ── Scoring ───────────────────────────────────────────────────
+  // Brightness 60–210 = good light.  Sharpness ≥ 8 = acceptable.
+  const brightOk  = brightness >= 60  && brightness <= 210;
+  const brightLow = brightness >= 30  && brightness < 60;   // dim but usable
+  const sharpOk   = sharpness  >= 8;
+  const sharpLow  = sharpness  >= 4   && sharpness  < 8;    // slightly blurry
+
+  const brightScore = brightOk  ? 45 : brightLow ? 25 : 5;
+  const sharpScore  = sharpOk   ? 45 : sharpLow  ? 25 : 5;
+  const score       = Math.min(100, brightScore + sharpScore + 10); // 10 baseline
 
   return {
     score,
     brightness,
     sharpness,
     checks: {
-      lighting: brightOk ? 'good' : brightness < 55 ? 'dark' : 'overexposed',
+      lighting: brightOk ? 'good' : brightness < 60 ? 'dark' : 'overexposed',
       focus:    sharpOk  ? 'good' : 'blurry',
     },
   };
@@ -779,10 +912,11 @@ function _inlAssessQuality(dataUrl) {
 function _inlLiveQualityTick() {
   const vid = document.getElementById('inl-cam-video');
   if (!vid || vid.paused || vid.ended || !_inlStream) return;
-  const canvas = document.createElement('canvas');
-  canvas.width = 160; canvas.height = 120;
-  canvas.getContext('2d').drawImage(vid, 0, 0, 160, 120);
-  _inlUpdateQualityUI(_inlAssessQuality(canvas.toDataURL()));
+  // Pass video element directly — avoids JPEG recompression at tiny size
+  const q = _inlAssessQuality(vid);
+  _inlUpdateQualityUI(q);
+  // Auto-torch: if dark for 2 consecutive ticks, turn on torch
+  _inlAutoTorch(q);
 }
 
 function _inlUpdateQualityUI(q) {
