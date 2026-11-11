@@ -508,14 +508,23 @@ async function inlOpenCamera() {
   vid.srcObject = _inlStream;
   await vid.play().catch(() => {});   // some browsers need an explicit play()
 
-  // Check torch capability and show button if supported
-  const track = _inlStream.getVideoTracks()[0];
-  if (track) {
-    const caps = track.getCapabilities ? track.getCapabilities() : {};
-    _torchSupported = !!caps.torch;
+  // Check torch capability after a short delay (camera needs ~500ms to init)
+  setTimeout(async () => {
+    const track = _inlStream?.getVideoTracks()[0];
+    if (!track) return;
+    let caps = {};
+    try { caps = track.getCapabilities ? track.getCapabilities() : {}; } catch (_) {}
     const torchBtn = document.getElementById('inl-torch-btn');
-    if (torchBtn) torchBtn.classList.toggle('hidden', !_torchSupported);
-  }
+    if (caps.torch === true) {
+      // Definitely supported — show button
+      _torchSupported = true;
+      if (torchBtn) torchBtn.classList.remove('hidden');
+    } else if (caps.torch !== false) {
+      // Unknown — show button anyway, _inlSetTorch() will hide it if it fails
+      if (torchBtn) torchBtn.classList.remove('hidden');
+    }
+    // caps.torch === false → definitively unsupported, leave button hidden
+  }, 500);
 
   // Show streaming UI
   _inlSetStreamingUI(true);
@@ -656,62 +665,89 @@ function inlStopCamera(keepUI = false) {
 
 // ───────────────────────────────────────────────────────────────────────────
 //  TORCH / FLASHLIGHT
-//  Uses the MediaStreamTrack ImageCapture API — works on Android Chrome/Edge.
-//  iOS Safari does not support torch via getUserMedia (use the native camera).
+//  Works on Android Chrome/Edge (rear camera).
+//  NOT supported on iOS Safari or desktop browsers.
+//
+//  Rules:
+//  • Auto-ON  when brightness < 80  (after 1 dark reading ~1.5 s)
+//  • Stays ON until user presses "Torch Off" or camera stops
+//  • Never auto-turns off — user has full manual control
 // ───────────────────────────────────────────────────────────────────────────
 
-let _darkTickCount = 0;   // consecutive dark ticks before auto-torch fires
+let _darkTickCount = 0;
 
 async function _inlSetTorch(on) {
-  if (!_inlStream) return;
+  if (!_inlStream) return false;
   const track = _inlStream.getVideoTracks()[0];
-  if (!track) return;
+  if (!track) return false;
 
-  // Check capability
-  const caps = track.getCapabilities ? track.getCapabilities() : {};
-  if (!caps.torch) {
+  // getCapabilities() can return {} immediately after stream opens — that's OK.
+  // caps.torch === false (boolean) = definitively unsupported.
+  // caps.torch === undefined       = unknown, still try.
+  let caps = {};
+  try { caps = track.getCapabilities ? track.getCapabilities() : {}; } catch (_) {}
+  if (caps.torch === false) {
     _torchSupported = false;
-    return;
+    document.getElementById('inl-torch-btn')?.classList.add('hidden');
+    return false;
   }
-  _torchSupported = true;
 
   try {
     await track.applyConstraints({ advanced: [{ torch: on }] });
-    _torchOn = on;
+    _torchOn        = on;
+    _torchSupported = true;
     _inlUpdateTorchBtn(on);
-    if (on) showToast('💡 Flashlight on — image is dark', 'info');
+    // Reveal torch button now that we know it works
+    const btn = document.getElementById('inl-torch-btn');
+    if (btn) btn.classList.remove('hidden');
+    if (on) showToast('💡 Flashlight ON — press "Torch Off" to turn off', 'info');
+    return true;
   } catch (e) {
-    console.warn('[OralAI torch]', e);
+    console.warn('[OralAI torch]', e.name, e.message);
+    _torchSupported = false;
+    document.getElementById('inl-torch-btn')?.classList.add('hidden');
+    return false;
   }
 }
 
-function _inlAutoTorch(q) {
-  // Only attempt on mobile rear camera where torch is relevant
+// Auto-torch: called every quality tick.
+// Once ON it is NEVER turned off automatically — only by user or camera stop.
+function _inlAutoTorch(brightness) {
   if (!_inlStream) return;
-  if (q.checks.lighting === 'dark') {
+  if (_torchOn)    return;   // already on, nothing to do
+
+  if (brightness < 80) {
     _darkTickCount++;
-    // Fire after 2 consecutive dark readings (~3 s)
-    if (_darkTickCount >= 2 && !_torchOn) {
+    if (_darkTickCount >= 1) {   // fire on first dark tick (~1.5 s)
+      _darkTickCount = 0;
       _inlSetTorch(true);
     }
   } else {
-    _darkTickCount = 0;
-    // Turn off torch when lighting is good again
-    if (_torchOn) _inlSetTorch(false);
+    _darkTickCount = 0;          // reset counter when bright
   }
 }
 
 function _inlUpdateTorchBtn(on) {
   const btn = document.getElementById('inl-torch-btn');
   if (!btn) return;
-  btn.textContent   = on ? '🔦 Torch On' : '🔦 Torch';
-  btn.style.background = on ? 'rgba(251,191,36,0.2)' : '';
-  btn.style.borderColor= on ? 'rgba(251,191,36,0.5)' : '';
-  btn.style.color      = on ? '#fbbf24' : '';
+  if (on) {
+    btn.innerHTML     = '🔦 Torch Off';
+    btn.style.cssText = 'background:rgba(251,191,36,0.25);border-color:rgba(251,191,36,0.6);color:#fbbf24;';
+  } else {
+    btn.innerHTML     = '🔦 Torch';
+    btn.style.cssText = '';
+  }
 }
 
+// Manual toggle — when user turns it off, reset dark counter so auto won't
+// immediately re-fire if the scene is still dark.
 function inlToggleTorch() {
-  _inlSetTorch(!_torchOn);
+  if (_torchOn) {
+    _inlSetTorch(false);
+    _darkTickCount = 0;   // prevent instant re-trigger
+  } else {
+    _inlSetTorch(true);
+  }
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -915,8 +951,8 @@ function _inlLiveQualityTick() {
   // Pass video element directly — avoids JPEG recompression at tiny size
   const q = _inlAssessQuality(vid);
   _inlUpdateQualityUI(q);
-  // Auto-torch: if dark for 2 consecutive ticks, turn on torch
-  _inlAutoTorch(q);
+  // Auto-torch: pass raw brightness value (0-255)
+  _inlAutoTorch(q.brightness);
 }
 
 function _inlUpdateQualityUI(q) {
