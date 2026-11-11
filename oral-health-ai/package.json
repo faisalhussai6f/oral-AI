@@ -1,0 +1,9 @@
+{
+  "name": "oral-health-ai",
+  "version": "1.0.0",
+  "description": "Real-Time Oral Disease Detection - Frontend SPA",
+  "private": true,
+  "scripts": {
+    "build": "echo 'Static site - no build step required'"
+  }
+}
