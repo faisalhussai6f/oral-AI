@@ -1,0 +1,39 @@
+# Python virtual environment
+oral-health-ai/backend/.venv/
+.venv/
+venv/
+env/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Environment variables (never commit secrets)
+oral-health-ai/backend/.env
+
+# VS Code workspace settings
+.vscode/
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Trained model weights (large binary files — download separately)
+oral-health-ai/backend/models/*.pth
+oral-health-ai/backend/models/*.h5
+oral-health-ai/backend/model/
+oral-health-ai/backend/*.pth
+oral-health-ai/backend/*.h5
+
+# Logs
+*.log
+
+# Node (if ever added)
+node_modules/

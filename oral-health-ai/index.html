@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0" />
+  <meta name="description"     content="AI + IoT powered oral health monitoring with real-time disease detection" />
+  <meta name="theme-color"     content="#0a8aff" />
+  <meta name="mobile-web-app-capable"        content="yes" />
+  <meta name="apple-mobile-web-app-capable"  content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title"    content="OralAI" />
+  <meta property="og:title"       content="OralAI – Real-Time Oral Disease Detection" />
+  <meta property="og:description" content="AI + IoT oral health monitoring system" />
+  <meta property="og:type"        content="website" />
+
+  <title>OralAI – Real-Time Oral Disease Detection</title>
+
+  <!-- PWA -->
+  <link rel="manifest"         href="manifest.json" />
+  <link rel="apple-touch-icon" href="assets/icons/icon.svg" />
+  <link rel="icon" type="image/svg+xml" href="assets/icons/icon.svg" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🦷</text></svg>" />
+
+  <!-- Manrope + DM Sans — premium dental wellness typography -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@300;400;500;600;700;800;900&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&display=swap" rel="stylesheet">
+
+  <!-- Tailwind CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: ['class', '[data-theme="dark"]'],
+      theme: {
+        extend: {
+          fontFamily: {
+            sans:    ['DM Sans', 'Manrope', 'system-ui', 'sans-serif'],
+            heading: ['Manrope', 'DM Sans', 'system-ui', 'sans-serif'],
+          },
+          colors: {
+            /* Deep emerald — primary brand */
+            brand: {
+              50:  '#EAF4F0',
+              100: '#C8E5DB',
+              200: '#9FCFC0',
+              300: '#6AB8A3',
+              400: '#3DA086',
+              500: '#176B5B',  /* main */
+              600: '#0F4D40',  /* hover */
+              700: '#093830',
+              800: '#052420',
+              900: '#021410',
+            },
+            /* Warm coral — CTA, urgency */
+            coral: {
+              50:  '#FCF0EC',
+              100: '#F8D9D1',
+              200: '#F2B8AB',
+              300: '#EB9480',
+              400: '#E87B62',  /* main */
+              500: '#D16248',  /* hover */
+              600: '#B44935',
+              700: '#8E3326',
+              800: '#682118',
+              900: '#42120C',
+            },
+            /* Soft sage — secondary */
+            sage: {
+              50:  '#F2F8F4',
+              100: '#DFF0E6',
+              200: '#C4E2D2',
+              300: '#B8D8C4',  /* main */
+              400: '#8DC4A8',
+              500: '#6BA88A',
+              600: '#4D8C6C',
+              700: '#35704E',
+              800: '#1F5234',
+              900: '#0D341B',
+            },
+            /* Warm amber — warning/pending */
+            amber: {
+              50:  '#FDF4E1',
+              100: '#FAE5B8',
+              200: '#F6D48A',
+              300: '#EFBF54',
+              400: '#D98B18',  /* main */
+              500: '#B87310',
+              600: '#94590A',
+              700: '#6F4006',
+              800: '#4A2A03',
+              900: '#251501',
+            },
+            /* Terracotta — urgent/error */
+            terra: {
+              50:  '#FBF0EE',
+              100: '#F6D9D5',
+              200: '#EDBAAF',
+              300: '#E0937F',
+              400: '#D06755',
+              500: '#B74736',  /* main */
+              600: '#963228',
+              700: '#742019',
+              800: '#52110E',
+              900: '#2E0606',
+            },
+            /* Warm ivory surfaces (Tailwind can't override CSS vars well, so map here) */
+            ivory:  { DEFAULT: '#FAF8F4', dark: '#F4F1EB' },
+            surface:{ DEFAULT: '#FFFFFF', secondary: '#F9F7F3' },
+          },
+          borderRadius: {
+            'card': '16px',
+            'xl2':  '20px',
+            '2xl2': '28px',
+          },
+          boxShadow: {
+            'warm-sm': '0 2px 8px rgba(32,37,35,.07), 0 1px 3px rgba(32,37,35,.05)',
+            'warm-md': '0 4px 20px rgba(32,37,35,.08), 0 2px 8px rgba(32,37,35,.05)',
+            'warm-lg': '0 12px 40px rgba(32,37,35,.10), 0 4px 16px rgba(32,37,35,.06)',
+          }
+        }
+      }
+    }
+  </script>
+
+  <link rel="stylesheet" href="assets/styles.css" />
+</head>
+<body class="min-h-screen" style="background:var(--bg);color:var(--text-base)">
+
+  <div id="app"></div>
+
+  <!--
+    ════════════════════════════════════════════
+    Script load order (STRICT — do NOT reorder)
+    ════════════════════════════════════════════
+    1.  router.js        — SPA router + skeleton + scroll-to-top
+    2.  store.js         — localStorage persistence layer
+    3.  notfound.js      — _page404() helper + page404() route
+    4.  onboarding.js    — First-run 7-slide wizard
+    5.  Page modules (15 pages — alphabetical within section)
+    6.  pages.js         — registers all 14 routes with Router
+    7.  assistant.js     — AI chat FAB + keyboard shortcuts (G=settings)
+    8.  auth.js          — login / register / _bootApp (defers app.js calls)
+    9.  app.js           — AppState + shell + boot (MUST be last)
+    ════════════════════════════════════════════
+  -->
+
+  <!-- Core infrastructure -->
+  <script src="assets/imageDB.js"></script>
+  <script src="assets/router.js"></script>
+  <script src="assets/store.js"></script>
+  <script src="assets/modal.js"></script>
+
+  <!-- Shared helpers (before pages) -->
+  <script src="pages/notfound.js"></script>
+  <script src="pages/onboarding.js"></script>
+  <script src="pages/landing.js"></script>
+
+  <!-- Page modules -->
+  <script src="pages/dashboard.js"></script>
+  <script src="pages/dashboard_patient.js"></script>
+  <script src="pages/dashboard_doctor.js"></script>
+  <script src="pages/doctor_review.js"></script>
+  <script src="pages/upload.js"></script>
+  <!-- enhancements.js must load before report.js -->
+  <script src="pages/enhancements.js"></script>
+  <script src="pages/report.js"></script>
+  <script src="pages/scans.js"></script>
+  <script src="pages/sensors.js"></script>
+  <script src="pages/analytics.js"></script>
+  <script src="pages/telehealth.js"></script>
+  <script src="pages/compare.js"></script>
+  <script src="pages/notifications.js"></script>
+  <script src="pages/settings.js"></script>
+  <script src="pages/calculator.js"></script>
+  <script src="pages/treatments.js"></script>
+  <script src="pages/progress.js"></script>
+  <!-- New feature pages -->
+  <script src="pages/camera.js"></script>
+  <script src="pages/symptom.js"></script>
+  <script src="pages/reminders.js"></script>
+  <script src="pages/dentist.js"></script>
+  <script src="pages/family.js"></script>
+  <script src="pages/accessibility.js"></script>
+  <script src="pages/iot_health.js"></script>
+  <script src="pages/clinic.js"></script>
+  <script src="pages/privacy.js"></script>
+  <script src="pages/profile.js"></script>
+
+  <!-- Registration + assistant + auth + boot -->
+  <script src="assets/pages.js"></script>
+  <script src="assets/assistant.js"></script>
+  <script src="pages/auth.js"></script>
+  <script src="assets/app.js"></script>
+
+</body>
+</html>

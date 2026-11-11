@@ -1,0 +1,11 @@
+{
+  "classes": [
+    "caries",
+    "gingivitis",
+    "healthy",
+    "oral_lesion",
+    "oral_ulcer",
+    "plaque"
+  ],
+  "num_classes": 6
+}

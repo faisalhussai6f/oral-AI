@@ -1,0 +1,29 @@
+OralAI — Classification Report (Test Set)
+Generated : 2026-09-27T14:27:52.180241+00:00
+Checkpoint: C:\Users\faisa\OneDrive\Desktop\major\oral-health-ai\backend\oralai_best.pth
+Test dir  : C:\Users\faisa\OneDrive\Desktop\major\oral-health-ai\backend\dataset\test
+Samples   : 3207
+Top-1 Acc : 90.8326%
+Top-3 Acc : 99.4699%
+
+NOTE: This is TEST-SET accuracy. val_acc in the checkpoint is a different split.
+
+              precision    recall  f1-score   support
+
+      caries     0.6559    0.9104    0.7625        67
+  gingivitis     0.8792    0.8144    0.8456       706
+     healthy     0.9646    0.9905    0.9774       633
+ oral_lesion     0.9926    0.9475    0.9695      1276
+  oral_ulcer     0.8022    0.9125    0.8538        80
+      plaque     0.7345    0.8270    0.7780       445
+
+    accuracy                         0.9083      3207
+   macro avg     0.8382    0.9004    0.8645      3207
+weighted avg     0.9145    0.9083    0.9100      3207
+
+WEAK CLASSES
+----------------------------------------
+  caries: recall=91.0%  f1=76.2%  test_n=67
+    -> few test images (67 < 100)
+  oral_ulcer: recall=91.2%  f1=85.4%  test_n=80
+    -> few test images (80 < 100)

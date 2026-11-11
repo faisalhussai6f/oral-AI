@@ -1,0 +1,164 @@
+{
+  "generated_at": "2026-09-27T14:27:52.180241+00:00",
+  "note": "top1_accuracy and top3_accuracy are TEST-SET metrics. val_acc_in_checkpoint is a DIFFERENT split measured during training \u2014 do NOT report it as model accuracy.",
+  "checkpoint": "C:\\Users\\faisa\\OneDrive\\Desktop\\major\\oral-health-ai\\backend\\oralai_best.pth",
+  "arch": "mobilenet_v2",
+  "head": "MobileNetV2 + Linear(1280\u2192256)\u2192ReLU\u2192Linear(256\u21926)",
+  "img_size": 96,
+  "epoch_saved": 20,
+  "val_acc_in_checkpoint": 90.6133,
+  "test_dir": "C:\\Users\\faisa\\OneDrive\\Desktop\\major\\oral-health-ai\\backend\\dataset\\test",
+  "n_test_images": 3207,
+  "top1_accuracy": 0.908326,
+  "top1_accuracy_pct": 90.8326,
+  "top3_accuracy": 0.994699,
+  "top3_accuracy_pct": 99.4699,
+  "macro_precision": 0.838179,
+  "macro_recall": 0.900396,
+  "macro_f1": 0.864471,
+  "weighted_precision": 0.914524,
+  "weighted_recall": 0.908326,
+  "weighted_f1": 0.91001,
+  "per_class": {
+    "caries": {
+      "precision": 0.6559,
+      "recall": 0.9104,
+      "f1": 0.7625,
+      "support": 67
+    },
+    "gingivitis": {
+      "precision": 0.8792,
+      "recall": 0.8144,
+      "f1": 0.8456,
+      "support": 706
+    },
+    "healthy": {
+      "precision": 0.9646,
+      "recall": 0.9905,
+      "f1": 0.9774,
+      "support": 633
+    },
+    "oral_lesion": {
+      "precision": 0.9926,
+      "recall": 0.9475,
+      "f1": 0.9695,
+      "support": 1276
+    },
+    "oral_ulcer": {
+      "precision": 0.8022,
+      "recall": 0.9125,
+      "f1": 0.8538,
+      "support": 80
+    },
+    "plaque": {
+      "precision": 0.7345,
+      "recall": 0.827,
+      "f1": 0.778,
+      "support": 445
+    }
+  },
+  "test_image_counts": {
+    "caries": 67,
+    "gingivitis": 706,
+    "healthy": 633,
+    "oral_lesion": 1276,
+    "oral_ulcer": 80,
+    "plaque": 445
+  },
+  "weak_classes": [
+    {
+      "class": "caries",
+      "recall": 0.9104,
+      "precision": 0.6559,
+      "f1": 0.7625,
+      "test_count": 67,
+      "flags": [
+        "few test images (67 < 100)"
+      ]
+    },
+    {
+      "class": "oral_ulcer",
+      "recall": 0.9125,
+      "precision": 0.8022,
+      "f1": 0.8538,
+      "test_count": 80,
+      "flags": [
+        "few test images (80 < 100)"
+      ]
+    }
+  ],
+  "class_names": [
+    "caries",
+    "gingivitis",
+    "healthy",
+    "oral_lesion",
+    "oral_ulcer",
+    "plaque"
+  ],
+  "preprocessing": {
+    "transform": "build_transform(96, 'infer')",
+    "resize": "(96, 96)",
+    "normalize_mean": [
+      0.485,
+      0.456,
+      0.406
+    ],
+    "normalize_std": [
+      0.229,
+      0.224,
+      0.225
+    ],
+    "exif_fix": "ImageOps.exif_transpose via safe_loader",
+    "augmentation": "none (infer split)"
+  },
+  "confusion_matrix": [
+    [
+      61,
+      1,
+      1,
+      0,
+      0,
+      4
+    ],
+    [
+      14,
+      575,
+      0,
+      0,
+      0,
+      117
+    ],
+    [
+      0,
+      3,
+      627,
+      3,
+      0,
+      0
+    ],
+    [
+      8,
+      9,
+      20,
+      1209,
+      18,
+      12
+    ],
+    [
+      1,
+      0,
+      2,
+      4,
+      73,
+      0
+    ],
+    [
+      9,
+      66,
+      0,
+      2,
+      0,
+      368
+    ]
+  ]
+}
