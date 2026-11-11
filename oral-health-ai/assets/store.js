@@ -79,8 +79,8 @@ const Store = {
     settings: {
       notifications: { scanReminders:true, aiRecommendations:true, dentistAlerts:false, sensorAlerts:true },
       theme: 'light',
-      backendUrl: 'http://localhost:5000',
-      useBackend: false,   // set true when Flask server is running
+      backendUrl: 'https://oral-ai-1.onrender.com',
+      useBackend: true,    // live Render backend
     },
     appointments: [
       { id:'APT-001', dentist:'Dr. Arjun Sharma', specialty:'Periodontist',   date:'2026-10-05', time:'10:30 AM', mode:'video',    status:'confirmed', notes:'Follow-up on plaque findings', avatar:'AS' },
