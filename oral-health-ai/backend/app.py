@@ -109,10 +109,11 @@ app.secret_key = os.environ.get("SECRET_KEY", "oralai-dev-key-change-in-prod")
 
 _raw_origins = os.environ.get(
     "ALLOWED_ORIGINS",
-    "http://localhost:8080,http://127.0.0.1:8080,http://localhost:5500,http://127.0.0.1:5500",
+    "http://localhost:8080,http://127.0.0.1:8080,http://localhost:5500,http://127.0.0.1:5500,"
+    "https://oral-ai-frontend.onrender.com,https://oral-ai.onrender.com",
 )
 _origins = [o.strip() for o in _raw_origins.split(",") if o.strip()]
-CORS(app, resources={r"/*": {"origins": _origins}}, supports_credentials=False)
+CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=False)
 
 logging.basicConfig(
     level=getattr(logging, os.environ.get("LOG_LEVEL", "INFO"), logging.INFO),

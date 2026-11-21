@@ -480,6 +480,19 @@ window.addEventListener('DOMContentLoaded', () => {
   }
 
   hydrateState();
+
+  // ── Migration: force backend URL to Render when running on hosted domain ──
+  // If the stored URL still points to localhost (old cached value from local dev),
+  // override it with the live Render backend so the hosted site works immediately.
+  const _liveBackend = 'https://oral-ai-1.onrender.com';
+  const _storedUrl   = AppState.settings.backendUrl || '';
+  const _isHosted    = !['localhost','127.0.0.1'].includes(location.hostname);
+  if (_isHosted && (_storedUrl.includes('localhost') || _storedUrl.includes('127.0.0.1') || !_storedUrl)) {
+    AppState.settings.backendUrl = _liveBackend;
+    AppState.settings.useBackend = true;
+    Store.saveSettings(AppState.settings);
+  }
+
   // Migrate: if user had old 'dark' default, reset to 'light' for new warm theme
   if (!Store.get('oralai_theme_v4_migrated')) {
     if (AppState.settings.theme === 'dark') {
