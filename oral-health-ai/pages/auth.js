@@ -151,6 +151,69 @@ function renderLoginPage() {
               <label class="form-label">Date of Birth</label>
               <input id="reg-dob" type="date" class="form-input" autocomplete="bday" />
             </div>
+
+            <!-- ── Phone number + OTP ──────────────────────────────── -->
+            <div>
+              <label class="form-label">
+                Mobile Number
+                <span class="text-gray-600 font-normal ml-1">(optional — for scan SMS alerts)</span>
+              </label>
+              <div class="flex gap-2">
+                <input id="reg-phone" type="tel" class="form-input flex-1"
+                       placeholder="+91 98765 43210"
+                       autocomplete="tel"
+                       oninput="regPhoneChanged()" />
+                <button type="button" id="reg-send-otp-btn"
+                  onclick="regSendOtp()"
+                  class="btn-secondary text-sm px-3 flex-shrink-0 hidden">
+                  Send OTP
+                </button>
+              </div>
+              <p class="text-xs text-gray-600 mt-1">Include country code (e.g. +91 for India, +1 for US/CA)</p>
+            </div>
+
+            <!-- OTP input — hidden until OTP is sent -->
+            <div id="reg-otp-row" class="hidden space-y-2">
+              <div class="flex items-center gap-2 p-3 rounded-xl bg-blue-500/8 border border-blue-500/20 text-xs text-blue-300">
+                <span>📱</span>
+                <span>A 6-digit code has been sent to your number.
+                  <button type="button" onclick="regSendOtp(true)"
+                    class="underline hover:text-blue-200 ml-1">Resend</button>
+                </span>
+              </div>
+              <div class="flex gap-2">
+                <input id="reg-otp" type="text" inputmode="numeric" pattern="[0-9]{6}"
+                  maxlength="6" class="form-input flex-1 text-center text-xl tracking-widest font-mono"
+                  placeholder="000000" />
+                <button type="button" id="reg-verify-otp-btn"
+                  onclick="regVerifyOtp()"
+                  class="btn-primary text-sm px-4 flex-shrink-0">
+                  Verify
+                </button>
+              </div>
+              <div id="reg-otp-status" class="text-xs"></div>
+            </div>
+
+            <!-- SMS consent — hidden until phone is verified -->
+            <div id="reg-sms-consent-row" class="hidden p-4 rounded-xl border border-brand-500/30 bg-brand-500/5 space-y-3">
+              <div class="flex items-start gap-2">
+                <span class="text-green-400 text-lg flex-shrink-0">✅</span>
+                <div class="text-sm text-green-300 font-semibold">Phone number verified!</div>
+              </div>
+              <div class="text-xs text-gray-300 leading-relaxed">
+                <strong>SMS Scan Alerts:</strong> After each successful oral health scan, OralAI can
+                send a brief summary to your verified number. The message will include the top finding,
+                score, and a reminder that it is an AI screening — not a clinical diagnosis.
+              </div>
+              <label class="flex items-start gap-3 cursor-pointer">
+                <input type="checkbox" id="reg-sms-consent" class="mt-0.5 accent-brand-500 w-4 h-4 flex-shrink-0" />
+                <span class="text-xs text-gray-300">
+                  I agree to receive automated SMS scan summaries to my verified mobile number.
+                  I can withdraw consent at any time in <strong>Settings → Notifications</strong>.
+                </span>
+              </label>
+            </div>
+
             <div>
               <label class="form-label">I am a</label>
               <div class="grid grid-cols-2 gap-3 mt-1">
@@ -347,15 +410,158 @@ function handleRegister(e) {
   const roleEl     = document.querySelector('input[name="reg-role"]:checked');
   const role       = roleEl ? roleEl.value : 'patient';
   const speciality = document.getElementById('reg-speciality')?.value || '';
+  const phone      = document.getElementById('reg-phone')?.value.trim() || '';
+  const smsConsent = document.getElementById('reg-sms-consent')?.checked || false;
+  const phoneVerified = window._regPhoneVerified || false;
+
   if (!first || !email) { showAuthToast('Please fill all required fields','error'); return; }
+
+  // If phone was entered but not verified, block until verified
+  if (phone && !phoneVerified) {
+    showAuthToast('Please verify your mobile number with the OTP before continuing.', 'error');
+    return;
+  }
+
   const user = {
     name: `${first} ${last}`.trim(),
     email, dob, role, speciality,
+    phone: phoneVerified ? phone : '',
+    phoneVerified,
+    smsConsent: phoneVerified ? smsConsent : false,
     joinedDate: new Date().toISOString(),
     avatarColor: role === 'doctor' ? '#a855f7,#6366f1' : '#00d4aa,#06b6d4',
   };
+
+  // Persist SMS consent to backend if phone is verified and consent given
+  if (phoneVerified && smsConsent) {
+    _regPersistSmsConsent(email, smsConsent);
+  }
+
   _bootApp(user);
   showToast(`Welcome, ${first}! Your ${role} account is ready.`, 'success');
+}
+
+// ── OTP flow helpers ───────────────────────────────────────────────────────
+
+// Track OTP state in module-level variables (cleared when register panel resets)
+window._regPhoneVerified = false;
+window._regOtpSending    = false;
+
+function regPhoneChanged() {
+  const phone = document.getElementById('reg-phone')?.value.trim() || '';
+  const btn   = document.getElementById('reg-send-otp-btn');
+  window._regPhoneVerified = false;
+  // Show "Send OTP" button once user types anything resembling a phone number
+  if (btn) btn.classList.toggle('hidden', phone.length < 7);
+  // Hide OTP row and consent row if user changes the number after sending
+  document.getElementById('reg-otp-row')?.classList.add('hidden');
+  document.getElementById('reg-sms-consent-row')?.classList.add('hidden');
+}
+
+async function regSendOtp(isResend = false) {
+  if (window._regOtpSending) return;
+  const phone = document.getElementById('reg-phone')?.value.trim();
+  if (!phone || phone.length < 7) {
+    showAuthToast('Enter a valid phone number including country code (e.g. +91…)', 'error');
+    return;
+  }
+
+  window._regOtpSending = true;
+  const btn = document.getElementById('reg-send-otp-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Sending…'; }
+
+  const backendUrl = (AppState?.settings?.backendUrl || 'http://localhost:5000').replace(/\/$/, '');
+  try {
+    const r = await fetch(backendUrl + '/api/otp/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone }),
+      signal: AbortSignal.timeout(10000),
+    });
+    const data = await r.json();
+    if (r.ok) {
+      document.getElementById('reg-otp-row')?.classList.remove('hidden');
+      document.getElementById('reg-otp')?.focus();
+      const statusEl = document.getElementById('reg-otp-status');
+      if (statusEl) statusEl.textContent = '';
+      showAuthToast(
+        data.sms_sent
+          ? '📱 OTP sent to your phone!'
+          : '📋 OTP generated — check server log (SMS not configured)',
+        'info'
+      );
+    } else {
+      showAuthToast(data.error || 'Failed to send OTP', 'error');
+    }
+  } catch (err) {
+    showAuthToast('Could not reach backend — is Flask running?', 'error');
+    console.error('[OTP send]', err);
+  } finally {
+    window._regOtpSending = false;
+    if (btn) { btn.disabled = false; btn.textContent = isResend ? 'Resent!' : 'Send OTP'; }
+    setTimeout(() => { if (btn) btn.textContent = 'Send OTP'; }, 3000);
+  }
+}
+
+async function regVerifyOtp() {
+  const phone   = document.getElementById('reg-phone')?.value.trim();
+  const otp     = document.getElementById('reg-otp')?.value.trim();
+  const email   = document.getElementById('reg-email')?.value.trim();
+  const statusEl= document.getElementById('reg-otp-status');
+  const btn     = document.getElementById('reg-verify-otp-btn');
+
+  if (!otp || otp.length !== 6) {
+    if (statusEl) { statusEl.textContent = 'Enter the 6-digit code.'; statusEl.style.color = '#f87171'; }
+    return;
+  }
+
+  if (btn) { btn.disabled = true; btn.textContent = 'Verifying…'; }
+
+  const backendUrl = (AppState?.settings?.backendUrl || 'http://localhost:5000').replace(/\/$/, '');
+  try {
+    const r = await fetch(backendUrl + '/api/otp/verify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone, otp, user_id: email || phone }),
+      signal: AbortSignal.timeout(10000),
+    });
+    const data = await r.json();
+
+    if (r.ok) {
+      window._regPhoneVerified = true;
+      // Hide OTP row, show consent row
+      document.getElementById('reg-otp-row')?.classList.add('hidden');
+      document.getElementById('reg-send-otp-btn')?.classList.add('hidden');
+      document.getElementById('reg-sms-consent-row')?.classList.remove('hidden');
+      if (statusEl) { statusEl.textContent = ''; }
+      showAuthToast('✅ Phone number verified!', 'success');
+    } else {
+      window._regPhoneVerified = false;
+      if (statusEl) {
+        statusEl.textContent = data.error || 'Verification failed';
+        statusEl.style.color = '#f87171';
+      }
+    }
+  } catch (err) {
+    if (statusEl) { statusEl.textContent = 'Could not reach backend.'; statusEl.style.color = '#f87171'; }
+    console.error('[OTP verify]', err);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Verify'; }
+  }
+}
+
+async function _regPersistSmsConsent(userId, consent) {
+  const backendUrl = (AppState?.settings?.backendUrl || 'http://localhost:5000').replace(/\/$/, '');
+  try {
+    await fetch(backendUrl + '/api/sms/consent', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ user_id: userId, consent }),
+      signal: AbortSignal.timeout(5000),
+    });
+  } catch (e) {
+    console.warn('[SMS consent persist]', e);
+  }
 }
 
 // Show/hide speciality field based on role selection

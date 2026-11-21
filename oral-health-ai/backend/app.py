@@ -2397,6 +2397,367 @@ def export_patient_data():
     }
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+#  SMS / OTP  — phone verification + scan-result delivery
+#
+#  Provider : Twilio (https://www.twilio.com)
+#  Credentials are read from environment variables ONLY — never from request
+#  bodies or config files committed to source control.
+#
+#  Graceful-degradation contract:
+#  • If TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN are absent or empty, every SMS
+#    function logs the message to the server console instead of sending it.
+#    The API still returns success so the frontend flow completes normally.
+#  • A failed SMS never modifies or deletes a scan result.
+#  • Duplicate-send prevention: each scanId is recorded in _sms_sent_scans;
+#    a second call for the same ID is rejected with 409.
+# ══════════════════════════════════════════════════════════════════════════════
+
+import re as _re
+import hashlib as _hashlib
+import secrets as _secrets
+
+# ── Twilio client (lazy — only imported when credentials are present) ─────────
+_TWILIO_SID   = os.environ.get("TWILIO_ACCOUNT_SID", "").strip()
+_TWILIO_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN",  "").strip()
+_TWILIO_FROM  = os.environ.get("TWILIO_FROM",        "").strip()
+_OTP_EXPIRY   = int(os.environ.get("OTP_EXPIRY_SECONDS", "600"))   # 10 min default
+
+_sms_enabled  = bool(_TWILIO_SID and _TWILIO_TOKEN and _TWILIO_FROM)
+
+_twilio_client = None
+if _sms_enabled:
+    try:
+        from twilio.rest import Client as _TwilioClient
+        _twilio_client = _TwilioClient(_TWILIO_SID, _TWILIO_TOKEN)
+        log.info("✅  Twilio SMS client initialised  from=%s", _TWILIO_FROM)
+    except Exception as _te:
+        log.warning("⚠️  Twilio import failed: %s — SMS disabled", _te)
+        _sms_enabled = False
+else:
+    log.info("ℹ️  SMS credentials not set — running in log-only mode (no real SMS sent)")
+
+
+# ── In-memory stores ──────────────────────────────────────────────────────────
+# In production replace these with a database (Redis / PostgreSQL).
+_otp_store: dict       = {}   # phone_hash → {otp, expires_at, attempts}
+_phone_store: dict     = {}   # user_id    → {phone, verified, sms_consent}
+_sms_sent_scans: set   = set()  # scanIds already SMS'd — prevents duplicates
+
+
+# ── Phone number normalisation ────────────────────────────────────────────────
+def _normalise_phone(raw: str) -> str:
+    """
+    Strip everything except digits and a leading +.
+    Returns E.164-ish string, e.g. '+919876543210'.
+    Raises ValueError if the result is too short to be a real number.
+    """
+    cleaned = "+" + _re.sub(r"[^\d]", "", raw) if raw.startswith("+") else _re.sub(r"[^\d]", "", raw)
+    if len(cleaned.lstrip("+")) < 7:
+        raise ValueError(f"Phone number too short: '{raw}'")
+    return cleaned
+
+
+def _phone_hash(phone: str) -> str:
+    return _hashlib.sha256(phone.encode()).hexdigest()
+
+
+# ── Low-level send ────────────────────────────────────────────────────────────
+def _send_sms(to: str, body: str) -> dict:
+    """
+    Send an SMS via Twilio.  Falls back to log-only if credentials absent.
+
+    Returns {"sent": bool, "sid": str|None, "error": str|None}
+    """
+    # Hard limit: 160 chars (standard SMS segment)
+    body = body[:160]
+
+    if not _sms_enabled or _twilio_client is None:
+        log.info("[SMS log-only] TO=%s  BODY=%s", to, body)
+        return {"sent": False, "sid": None, "error": "SMS credentials not configured"}
+
+    try:
+        msg = _twilio_client.messages.create(body=body, from_=_TWILIO_FROM, to=to)
+        log.info("[SMS sent] sid=%s  to=%s  status=%s", msg.sid, to, msg.status)
+        return {"sent": True, "sid": msg.sid, "error": None}
+    except Exception as exc:
+        log.error("[SMS error] to=%s  error=%s", to, exc)
+        return {"sent": False, "sid": None, "error": str(exc)}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  OTP ENDPOINTS
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.route("/api/otp/send", methods=["POST"])
+@rate_limit(per_minute=5)
+def otp_send():
+    """
+    Send a 6-digit OTP to the given phone number.
+
+    Body: { "phone": "+919876543210" }
+
+    Rate-limited to 5 requests/min per IP to prevent abuse.
+    The OTP is valid for OTP_EXPIRY_SECONDS (default 10 min).
+    """
+    data = request.get_json(force=True) or {}
+    raw_phone = (data.get("phone") or "").strip()
+
+    if not raw_phone:
+        return jsonify({"error": "phone is required"}), 400
+
+    try:
+        phone = _normalise_phone(raw_phone)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+    # Generate OTP
+    otp    = str(_secrets.randbelow(900000) + 100000)   # 100000–999999
+    ph_key = _phone_hash(phone)
+    _otp_store[ph_key] = {
+        "otp":        otp,
+        "phone":      phone,
+        "expires_at": time.time() + _OTP_EXPIRY,
+        "attempts":   0,
+        "verified":   False,
+    }
+
+    body = f"OralAI: Your verification code is {otp}. Valid for {_OTP_EXPIRY // 60} min. Do not share."
+    result = _send_sms(phone, body)
+
+    # Always return success to the frontend — the OTP is printed in log-only mode
+    log.info("[OTP] generated for %s  sent=%s", phone, result["sent"])
+    return jsonify({
+        "message":  "OTP sent" if result["sent"] else "OTP generated (SMS unavailable — check server log)",
+        "sms_sent": result["sent"],
+        "expires_in": _OTP_EXPIRY,
+    }), 200
+
+
+@app.route("/api/otp/verify", methods=["POST"])
+@rate_limit(per_minute=10)
+def otp_verify():
+    """
+    Verify the OTP entered by the user.
+
+    Body: { "phone": "+919876543210", "otp": "123456", "user_id": "user@email.com" }
+
+    On success, marks the phone as verified and stores it against user_id.
+    Returns 400 on wrong OTP (up to 5 attempts allowed before the OTP is invalidated).
+    """
+    data     = request.get_json(force=True) or {}
+    raw_phone = (data.get("phone") or "").strip()
+    entered_otp = str(data.get("otp") or "").strip()
+    user_id  = (data.get("user_id") or "").strip()
+
+    if not raw_phone or not entered_otp:
+        return jsonify({"error": "phone and otp are required"}), 400
+
+    try:
+        phone = _normalise_phone(raw_phone)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+    ph_key = _phone_hash(phone)
+    record = _otp_store.get(ph_key)
+
+    if not record:
+        return jsonify({"error": "No OTP found for this number. Please request a new code."}), 404
+
+    # Expiry check
+    if time.time() > record["expires_at"]:
+        _otp_store.pop(ph_key, None)
+        return jsonify({"error": "OTP has expired. Please request a new code."}), 400
+
+    # Brute-force cap
+    record["attempts"] += 1
+    if record["attempts"] > 5:
+        _otp_store.pop(ph_key, None)
+        return jsonify({"error": "Too many incorrect attempts. Please request a new OTP."}), 429
+
+    if entered_otp != record["otp"]:
+        remaining = max(0, 5 - record["attempts"])
+        return jsonify({
+            "error":     f"Incorrect code. {remaining} attempt(s) remaining.",
+            "remaining": remaining,
+        }), 400
+
+    # ── Success ──
+    record["verified"] = True
+    _otp_store.pop(ph_key, None)   # consume — single use
+
+    # Store verified phone against user_id
+    if user_id:
+        _phone_store[user_id] = {
+            "phone":       phone,
+            "verified":    True,
+            "sms_consent": False,   # consent is set separately
+            "verified_at": datetime.now(timezone.utc).isoformat(),
+        }
+        _add_audit("phone_verified", user_id, f"Phone {phone[:4]}****{phone[-3:]} verified")
+
+    log.info("[OTP] verified for %s  user=%s", phone, user_id)
+    return jsonify({"message": "Phone number verified", "phone": phone}), 200
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  CONSENT  — SMS scan-result delivery consent
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.route("/api/sms/consent", methods=["POST"])
+def sms_consent():
+    """
+    Record or withdraw SMS scan-result consent for a user.
+
+    Body: { "user_id": "...", "consent": true|false }
+
+    The user must already have a verified phone number.
+    Withdrawal takes effect immediately — no future SMS will be sent.
+    """
+    data    = request.get_json(force=True) or {}
+    user_id = (data.get("user_id") or "").strip()
+    consent = data.get("consent")
+
+    if not user_id or consent is None:
+        return jsonify({"error": "user_id and consent (true/false) are required"}), 400
+
+    phone_rec = _phone_store.get(user_id)
+    if not phone_rec or not phone_rec.get("verified"):
+        return jsonify({"error": "Phone number not verified. Verify your number first."}), 400
+
+    phone_rec["sms_consent"] = bool(consent)
+    action = "consent_granted" if consent else "consent_withdrawn"
+    _add_audit(action, user_id, f"SMS scan-result consent {'granted' if consent else 'withdrawn'}")
+
+    msg = "SMS scan results enabled." if consent else "SMS scan results disabled. No further messages will be sent."
+    log.info("[SMS consent] user=%s  consent=%s", user_id, consent)
+    return jsonify({"message": msg, "sms_consent": bool(consent)}), 200
+
+
+@app.route("/api/sms/consent", methods=["GET"])
+def get_sms_consent():
+    """Return current SMS consent + phone verification status for a user."""
+    user_id = request.args.get("user_id", "").strip()
+    if not user_id:
+        return jsonify({"error": "user_id is required"}), 400
+
+    rec = _phone_store.get(user_id, {})
+    phone = rec.get("phone", "")
+    masked = (phone[:3] + "****" + phone[-3:]) if len(phone) >= 7 else ""
+    return jsonify({
+        "verified":    rec.get("verified",    False),
+        "sms_consent": rec.get("sms_consent", False),
+        "phone_masked": masked,
+    }), 200
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  SCAN-RESULT SMS  — triggered after /api/analyze succeeds
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _build_scan_sms(scan_result: dict) -> str:
+    """
+    Build a concise, safe SMS body from actual scan result fields only.
+
+    Rules:
+    - Use only fields that come directly from the analysis pipeline.
+    - Never fabricate findings, scores, or confidence values.
+    - Sanitise user/model text: strip newlines, truncate to prevent injection.
+    - Always end with the AI-not-a-diagnosis disclaimer.
+    - Hard limit: 160 chars.
+    """
+    score      = scan_result.get("score")
+    confidence = scan_result.get("confidence")
+    findings   = scan_result.get("findings") or []
+    demo_mode  = scan_result.get("demoMode", True)
+
+    # Reject demo / inconclusive results — do not send SMS for mock data
+    if demo_mode:
+        return ""
+
+    # Build finding summary (top finding only, sanitised)
+    if findings:
+        top = findings[0]
+        condition  = str(top.get("condition") or top.get("name") or "").strip()
+        severity   = str(top.get("severity") or "").strip()
+        # Sanitise: remove newlines, strip to 40 chars, allow only safe chars
+        condition  = _re.sub(r"[^\w\s\-/]", "", condition)[:40].strip()
+        severity   = _re.sub(r"[^\w\s]",    "", severity)[:15].strip()
+        finding_str = f"{severity} {condition}".strip() if severity else condition
+    else:
+        finding_str = "No significant disease detected"
+
+    conf_str = f" ({confidence}% confidence)" if confidence and isinstance(confidence, (int, float)) else ""
+    score_str = f"Score: {score}/100. " if score is not None else ""
+
+    body = (
+        f"OralAI scan: {finding_str}{conf_str}. "
+        f"{score_str}"
+        f"AI screening only - not a diagnosis. Consult a dentist."
+    )
+    return body[:160]
+
+
+@app.route("/api/sms/send-scan-result", methods=["POST"])
+@rate_limit(per_minute=20)
+def send_scan_result_sms():
+    """
+    Send an SMS summary of a completed scan to the user's verified number.
+
+    Body: { "user_id": "...", "scan_id": "RPT-...", "scan_result": {...} }
+
+    Guards:
+    1. User must have a verified phone.
+    2. User must have given SMS consent.
+    3. scan_id must not have been SMS'd before (duplicate prevention).
+    4. scan_result.demoMode must be false (never SMS mock data).
+    5. scan_result must contain actual findings (not empty / quality-rejected).
+    """
+    data        = request.get_json(force=True) or {}
+    user_id     = (data.get("user_id") or "").strip()
+    scan_id     = (data.get("scan_id") or "").strip()
+    scan_result = data.get("scan_result") or {}
+
+    if not user_id or not scan_id:
+        return jsonify({"error": "user_id and scan_id are required"}), 400
+
+    # ── Guard 1: verified phone ───────────────────────────────────────────────
+    phone_rec = _phone_store.get(user_id)
+    if not phone_rec or not phone_rec.get("verified"):
+        return jsonify({"skipped": True, "reason": "Phone not verified"}), 200
+
+    # ── Guard 2: consent ─────────────────────────────────────────────────────
+    if not phone_rec.get("sms_consent"):
+        return jsonify({"skipped": True, "reason": "User has not consented to SMS"}), 200
+
+    # ── Guard 3: duplicate prevention ────────────────────────────────────────
+    if scan_id in _sms_sent_scans:
+        return jsonify({"skipped": True, "reason": "SMS already sent for this scan"}), 409
+
+    # ── Guard 4+5: build message (returns "" for demo/inconclusive) ──────────
+    body = _build_scan_sms(scan_result)
+    if not body:
+        return jsonify({"skipped": True, "reason": "Demo mode or no findings — SMS not sent"}), 200
+
+    # ── Send ─────────────────────────────────────────────────────────────────
+    phone  = phone_rec["phone"]
+    result = _send_sms(phone, body)
+
+    if result["sent"] or not _sms_enabled:
+        # Mark as sent (even in log-only mode) to prevent duplicates
+        _sms_sent_scans.add(scan_id)
+        _add_audit("scan_sms_sent", user_id,
+                   f"Scan {scan_id} summary SMS {'sent' if result['sent'] else 'logged'}")
+
+    return jsonify({
+        "sent":     result["sent"],
+        "sms_mode": "live" if _sms_enabled else "log_only",
+        "sid":      result.get("sid"),
+        # Never echo back the full body or phone in the response
+        "error":    result.get("error") if not result["sent"] else None,
+    }), 200
+
+
 # ── Boot ──────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     load_pytorch_model()

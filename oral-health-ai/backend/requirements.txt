@@ -23,3 +23,8 @@ scikit-learn==1.5.1
 pandas==2.2.2
 matplotlib==3.9.2
 seaborn==0.13.2
+
+# ── SMS provider (Twilio) ─────────────────────────────────────────
+# Set TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM in .env
+# If credentials are absent, SMS is silently skipped (demo safe).
+twilio==9.3.6

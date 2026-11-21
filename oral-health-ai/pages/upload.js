@@ -1300,6 +1300,74 @@ async function startAnalysis() {
     _addAuditEvent(`New scan analysed: ${newId} — score ${newScan.score}, model ${newScan.model}`);
   }
 
+  // ── Trigger scan-result SMS (non-blocking, never fails the scan) ──────────
+  _triggerScanSms(newId, result);
+
   showToast('Analysis complete!', 'success');
   setTimeout(() => navigate('report', { id: newId }), 500);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  SCAN-RESULT SMS  — fires after every successful analysis
+//
+//  Guards (all checked server-side too, but checked here to avoid pointless calls):
+//  1. Backend must be reachable (useBackend=true)
+//  2. User must have a verified phone + SMS consent  (checked server-side)
+//  3. Result must not be demo mode
+//  4. Result must not be a quality-rejected image (score === 0)
+//  A failed SMS never blocks or modifies the scan result.
+// ═══════════════════════════════════════════════════════════════════════════
+
+async function _triggerScanSms(scanId, result) {
+  // Skip immediately for demo/mock results — backend enforces this too
+  if (result?.demoMode === true)       return;
+  if (!AppState.settings.useBackend)   return;
+  if (!AppState.user?.email)           return;
+  if ((result?.score ?? 0) === 0)      return;   // quality-rejected
+
+  const backendUrl = (AppState.settings.backendUrl || 'http://localhost:5000').replace(/\/$/, '');
+  const userId     = AppState.user.email;
+
+  try {
+    const r = await fetch(backendUrl + '/api/sms/send-scan-result', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({
+        user_id:     userId,
+        scan_id:     scanId,
+        scan_result: result,
+      }),
+      signal: AbortSignal.timeout(8000),
+    });
+
+    const data = await r.json().catch(() => ({}));
+
+    if (r.status === 409) {
+      // Already sent for this scan — expected on retries, not an error
+      console.info('[SMS] already sent for', scanId);
+      return;
+    }
+
+    if (!r.ok) {
+      console.warn('[SMS] backend error:', data.error || r.status);
+      return;
+    }
+
+    if (data.skipped) {
+      // No phone / no consent / demo mode — silent, expected
+      console.info('[SMS] skipped:', data.reason);
+      return;
+    }
+
+    if (data.sent) {
+      showToast('📱 Scan summary sent to your phone!', 'success');
+    } else if (data.sms_mode === 'log_only') {
+      // SMS not configured — only relevant in dev; don't bother the user
+      console.info('[SMS] log-only mode — message printed to server log');
+    }
+
+  } catch (err) {
+    // Network error or timeout — do NOT surface to user; scan result is unaffected
+    console.warn('[SMS] delivery call failed (non-critical):', err.message);
+  }
 }

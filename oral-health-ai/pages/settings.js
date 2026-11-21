@@ -127,6 +127,26 @@ function pageSettings() {
           ${toggle(key, notif[key] !== false,
             `settingToggleNotif('${key}', this.checked)`)}
         </div>`).join('')}
+
+      <!-- SMS consent (shown only if user has a verified phone) -->
+      ${AppState.user?.phoneVerified ? `
+      <div class="flex items-center justify-between p-3 rounded-xl bg-gray-900 border border-gray-800">
+        <div>
+          <div class="text-sm font-semibold text-gray-200">📱 SMS Scan Summaries</div>
+          <div class="text-xs text-gray-500 mt-0.5">
+            Receive a brief SMS after each scan to ${AppState.user?.phone
+              ? AppState.user.phone.slice(0,4) + '****' + AppState.user.phone.slice(-3)
+              : 'your verified number'}.
+            Withdrawal takes effect immediately.
+          </div>
+        </div>
+        ${toggle('smsConsent', AppState.user?.smsConsent || false,
+          "settingToggleSmsConsent(this.checked)")}
+      </div>` : `
+      <div class="flex items-center gap-3 p-3 rounded-xl bg-gray-900 border border-gray-800 text-xs text-gray-500">
+        <span>📱</span>
+        <span>Add and verify a mobile number during signup to enable SMS scan summaries.</span>
+      </div>`}
     </div>
 
     <!-- ── Privacy & Data ── -->
@@ -270,6 +290,40 @@ function settingToggleNotif(key, value) {
   AppState.settings.notifications[key] = value;
   saveSettings();
   showToast(`${value ? 'Enabled' : 'Disabled'} ${key}`, 'info');
+}
+
+async function settingToggleSmsConsent(value) {
+  if (!AppState.user) return;
+  // Update local user object immediately
+  AppState.user.smsConsent = value;
+  Store.saveUser(AppState.user);
+
+  // Persist to backend — withdrawal must be instant
+  const backendUrl = (AppState.settings.backendUrl || 'http://localhost:5000').replace(/\/$/, '');
+  try {
+    const r = await fetch(backendUrl + '/api/sms/consent', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ user_id: AppState.user.email, consent: value }),
+      signal:  AbortSignal.timeout(5000),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (r.ok) {
+      showToast(
+        value
+          ? '📱 SMS scan summaries enabled'
+          : '🔕 SMS scan summaries disabled — no further messages will be sent',
+        value ? 'success' : 'info'
+      );
+    } else {
+      showToast(data.error || 'Could not update SMS consent on server', 'warning');
+    }
+  } catch (err) {
+    // Backend unreachable — local change is still saved
+    showToast('SMS consent saved locally (backend unreachable)', 'warning');
+    console.warn('[SMS consent]', err);
+  }
+  navigate('settings');
 }
 
 function settingToggle(key, value) {
