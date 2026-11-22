@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html>
+<head><title>OralAI Screenshot Seed</title></head>
+<body>
+<script>
+// Seed localStorage so the SPA auto-logs in as the demo patient
+const user = {
+  name: "Demo User", email: "demo@oralai.com", role: "patient",
+  dob: "", joinedDate: "2026-01-01T00:00:00Z",
+  avatarColor: "#00d4aa,#06b6d4", phone: "", phoneVerified: false, smsConsent: false
+};
+const settings = {
+  notifications: { scanReminders:true, aiRecommendations:true, dentistAlerts:false, sensorAlerts:true },
+  theme: "dark", backendUrl: "http://localhost:5000", useBackend: true
+};
+const scans = [
+  { id:"RPT-20260512-ANALYSIS", date:"May 12, 2026", type:"Basic RGB", device:"Smartphone",
+    region:"Upper front teeth", score:78, status:"analyzed",
+    findings:[
+      {condition:"Plaque Accumulation", severity:"Mild", confidence:73, region:"Interproximal spaces"},
+      {condition:"Gingivitis", severity:"Moderate", confidence:65, region:"Gingival margin"}
+    ], confidence:92, attentionAreas:2, imageDataUrl:null, notes:"Routine monthly check.",
+    model:"oralai-efficientnet-b0-v1", processingTime:"124ms",
+    diagnosis:"Mild plaque accumulation and early gingivitis detected. Professional cleaning recommended.",
+    recommendations:["Schedule professional cleaning","Use fluoride toothpaste daily","Follow-up scan in 30 days"],
+    sensorSnapshot:{ph:6.8, temperature:36.6, bacterial:42, moisture:71},
+    urgency:"dentist", severity:"Fair"
+  }
+];
+const sensors = {
+  ph:6.8, temperature:36.6, bacterial:42, moisture:71,
+  phHistory:[6.4,6.5,6.7,6.8,6.9,7.0,6.8,6.7,6.8,6.8],
+  tempHistory:[36.4,36.5,36.5,36.6,36.7,36.6,36.6,36.5,36.6,36.6],
+  lastUpdated: new Date().toISOString()
+};
+localStorage.setItem("oralai_user",     JSON.stringify(user));
+localStorage.setItem("oralai_loggedIn", "1");
+localStorage.setItem("oralai_settings", JSON.stringify(settings));
+localStorage.setItem("oralai_scans",    JSON.stringify(scans));
+localStorage.setItem("oralai_sensors",  JSON.stringify(sensors));
+localStorage.setItem("oralai_theme_v4_migrated", "true");
+document.body.innerHTML = "<h2 style='font-family:sans-serif;color:green'>✅ localStorage seeded! Redirecting to OralAI...</h2>";
+setTimeout(() => { location.href = "http://localhost:8080"; }, 500);
+</script>
+</body>
+</html>
