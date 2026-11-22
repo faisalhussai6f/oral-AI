@@ -65,6 +65,7 @@ def get_args() -> argparse.Namespace:
     p.add_argument("--seed",      type=int,   default=42)
     p.add_argument("--out-model", default="./models/oralai_efficientnet_best.pth")
     p.add_argument("--out-csv",   default="./outputs/training_history.csv")
+    p.add_argument("--samples-per-class", type=int, default=None, help="Cap samples per class for fast training")
     p.add_argument("--smoke",     action="store_true", help="2 epochs, batch=8, 50 samples/class")
     return p.parse_args()
 
@@ -96,7 +97,7 @@ def build_transforms(img_size: int, split: str):
 #  DATASET
 # ════════════════════════════════════════════════════════════════════════════
 
-def load_datasets(data_root: str, img_size: int, batch: int, workers: int, smoke: bool):
+def load_datasets(data_root: str, img_size: int, batch: int, workers: int, smoke: bool, samples_per_class: int = None):
     root      = Path(data_root)
     train_dir = root / "train"
     val_dir   = root / "val"
@@ -111,8 +112,10 @@ def load_datasets(data_root: str, img_size: int, batch: int, workers: int, smoke
     val_ds   = datasets.ImageFolder(str(val_dir),   transform=build_transforms(img_size, "val"),
                                     loader=_safe_loader)
 
-    # Smoke: limit to 50 samples per class for a fast sanity check
     if smoke:
+        samples_per_class = 50
+
+    if samples_per_class is not None:
         from torch.utils.data import Subset
         def cap(ds, n_per_class):
             idxs = []
@@ -122,8 +125,8 @@ def load_datasets(data_root: str, img_size: int, batch: int, workers: int, smoke
                     idxs.append(i)
                     counts[lbl] = counts.get(lbl, 0) + 1
             return Subset(ds, idxs)
-        train_ds = cap(train_ds, 50)
-        val_ds   = cap(val_ds,   20)
+        train_ds = cap(train_ds, samples_per_class)
+        val_ds   = cap(val_ds,   max(20, samples_per_class // 4))
 
     # Class weights for imbalanced data
     # Get underlying dataset for samples list
@@ -248,15 +251,19 @@ def main():
     Path(args.out_csv).parent.mkdir(parents=True, exist_ok=True)
 
     train_loader, val_loader, class_names, class_weights = load_datasets(
-        args.data, args.img_size, args.batch, args.workers, args.smoke
+        args.data, args.img_size, args.batch, args.workers, args.smoke, args.samples_per_class
     )
     num_classes = len(class_names)
 
-    # Save class names
-    cn_path = Path(args.out_model).parent / "class_names.json"
-    with open(cn_path, "w") as f:
-        json.dump({"classes": class_names, "num_classes": num_classes}, f, indent=2)
-    print(f"  Class names saved → {cn_path}")
+    # Save class names to destination and default paths
+    for p in [Path(args.out_model).parent / "class_names.json", Path("backend/class_names.json"), Path("backend/models/class_names.json")]:
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            with open(p, "w") as f:
+                json.dump({"classes": class_names, "num_classes": num_classes}, f, indent=2)
+            print(f"  Class names saved → {p}")
+        except Exception:
+            pass
 
     model     = build_model(num_classes, args.dropout, device)
     criterion = nn.CrossEntropyLoss(weight=class_weights.to(device))
@@ -314,14 +321,21 @@ def main():
         if is_best:
             best_val_acc = val_acc
             no_improve   = 0
-            torch.save({
+            ckpt_data = {
                 "epoch":       epoch,
                 "model_state": model.state_dict(),
                 "val_acc":     val_acc,
                 "class_names": class_names,
                 "img_size":    args.img_size,
                 "arch":        "mobilenet_v2",
-            }, args.out_model)
+            }
+            torch.save(ckpt_data, args.out_model)
+            for fb_path in [Path("backend/oralai_best.pth"), Path("backend/models/oralai_efficientnet_best.pth")]:
+                try:
+                    fb_path.parent.mkdir(parents=True, exist_ok=True)
+                    torch.save(ckpt_data, fb_path)
+                except Exception:
+                    pass
             marker = "  ← best ✓"
         else:
             no_improve += 1

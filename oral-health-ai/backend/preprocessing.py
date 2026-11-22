@@ -36,20 +36,23 @@ try:
 except ImportError:
     HAS_PIL = False
 
-# ── OpenCV (optional — better blur metric) ───────────────────────────────────
+# ── NumPy & OpenCV ───────────────────────────────────────────────────────────
+try:
+    import numpy as np
+except ImportError:
+    np = None
+
 try:
     import cv2
-    import numpy as np
     HAS_CV2 = True
-except ImportError:
+except (ImportError, OSError):
     HAS_CV2 = False
-    np = None
 
 # ── PyTorch / torchvision ────────────────────────────────────────────────────
 try:
     from torchvision import transforms
     HAS_TV = True
-except ImportError:
+except (ImportError, OSError):
     HAS_TV = False
 
 

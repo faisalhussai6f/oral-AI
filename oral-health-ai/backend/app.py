@@ -57,7 +57,16 @@ import random
 import time
 from datetime import datetime, timezone
 from functools import wraps
+import sys
 from pathlib import Path
+
+# Automatically inject local virtualenv site-packages if present
+_venv_pkgs = Path(__file__).resolve().parent / ".venv" / "Lib" / "site-packages"
+if _venv_pkgs.exists() and str(_venv_pkgs) not in sys.path:
+    sys.path.append(str(_venv_pkgs))
+_backend_dir = Path(__file__).resolve().parent
+if str(_backend_dir) not in sys.path:
+    sys.path.insert(0, str(_backend_dir))
 
 # ── Load .env ────────────────────────────────────────────────────────────────
 try:
@@ -94,13 +103,13 @@ try:
     import torch.nn as nn
     from torchvision import transforms
     HAS_TORCH = True
-except ImportError:
+except (ImportError, OSError):
     HAS_TORCH = False
 
 try:
     import timm
     HAS_TIMM = True
-except ImportError:
+except (ImportError, OSError):
     HAS_TIMM = False
 
 # ── Flask app ─────────────────────────────────────────────────────────────────
